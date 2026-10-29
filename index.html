@@ -32,9 +32,10 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .tot{font-weight:bold;background:var(--hd)}
 .ok{color:var(--ok);font-weight:bold}.er{color:var(--er);font-weight:bold}
 .b{font-weight:bold}
-#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);padding:10px 16px;border-radius:8px;color:#fff;display:none;max-width:90%;z-index:9}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);padding:10px 16px;border-radius:8px;color:#fff;display:none;max-width:90%;z-index:9999}
 dialog{border:1px solid var(--br);border-radius:10px;background:var(--card);color:var(--tx);max-width:460px;width:92%}
 dialog label{margin-bottom:10px}
+dialog::backdrop{background:rgba(0,0,0,.4)}
 .sep td{border-top:2px solid var(--br)}
 </style>
 </head>
@@ -48,6 +49,7 @@ dialog label{margin-bottom:10px}
   <button data-t="diario">Libro Diario</button>
   <button data-t="balance">Sumas y Saldos</button>
   <button data-t="estados">Estados contables</button>
+  <button data-t="plan">Plan de cuentas</button>
 </nav>
 <main>
   <section id="t-carga">
@@ -66,6 +68,7 @@ dialog label{margin-bottom:10px}
       </table></div>
       <div class="row" style="margin-top:12px">
         <button id="addLine" type="button">+ Agregar línea</button>
+        <button id="newAcc" type="button">+ Nueva cuenta</button>
         <button id="save" class="pri" type="button" disabled>Guardar asiento</button>
       </div>
     </div>
@@ -79,6 +82,13 @@ dialog label{margin-bottom:10px}
     <div class="card w"><h3 style="margin-top:0">Estado de Situación Patrimonial</h3><table id="tb-pat"></table></div>
     <div class="card w"><h3 style="margin-top:0">Estado de Resultados</h3><table id="tb-res"></table></div>
   </section>
+  <section id="t-plan" hidden>
+    <div class="card row">
+      <label style="flex:1;min-width:220px">Buscar cuenta<input id="filPlan" placeholder="Código o nombre"></label>
+      <button class="pri" id="newAcc2" type="button">+ Nueva cuenta</button>
+    </div>
+    <div class="card w"><table id="tb-plan"></table></div>
+  </section>
 </main>
 
 <dialog id="dlg">
@@ -89,6 +99,23 @@ dialog label{margin-bottom:10px}
     <div class="row"><button class="pri" value="ok">Guardar y conectar</button><button value="cancel" formnovalidate>Cancelar</button></div>
     <p style="font-size:12px;color:var(--mut)">Se guardan solo en este navegador; no quedan en el código del repositorio.</p>
   </form>
+</dialog>
+
+<dialog id="dlgC">
+  <h3 style="margin-top:0">Nueva cuenta</h3>
+  <label>Código<input id="aCod" autocomplete="off"></label>
+  <label>Nombre de la cuenta<input id="aNom" autocomplete="off" placeholder="Ej: Gastos de limpieza"></label>
+  <label>Tipo
+    <select id="aTipo">
+      <option>Activo</option>
+      <option>Pasivo</option>
+      <option>Patrimonio Neto</option>
+      <option>Ingresos</option>
+      <option>Egresos</option>
+    </select>
+  </label>
+  <div class="row"><button class="pri" id="aOk" type="button">Crear cuenta</button><button id="aCancel" type="button">Cancelar</button></div>
+  <p id="aErr" class="er" style="font-size:12px;margin-bottom:0"></p>
 </dialog>
 <div id="toast"></div>
 
@@ -106,6 +133,7 @@ const num = v => {
   return parseFloat(v) || 0;
 };
 let D = null;
+let pendingSelect = null; // select de asiento que pidió la cuenta nueva
 const cfg = { url: localStorage.getItem('ct_url') || '', key: localStorage.getItem('ct_key') || '' };
 
 function toast(msg, ok = true) {
@@ -132,7 +160,8 @@ async function post(body) {
 
 // ---------- Cargar asiento ----------
 const opts = () => '<option value="">— cuenta —</option>' +
-  D.plan.map(p => `<option value="${esc(p.codigo)}">${esc(p.codigo)} · ${esc(p.cuenta)}</option>`).join('');
+  D.plan.map(p => `<option value="${esc(p.codigo)}">${esc(p.codigo)} · ${esc(p.cuenta)}</option>`).join('') +
+  '<option value="__new">＋ Nueva cuenta…</option>';
 
 function addLine() {
   const tr = document.createElement('tr');
@@ -158,7 +187,7 @@ function calc() {
   $('#td').textContent = fmt(td); $('#th').textContent = fmt(th);
   $('#dif').innerHTML = d === 0 && td > 0 ? '<span class="ok">✔ El asiento cuadra</span>'
     : `<span class="er">Diferencia: ${fmt(d)}</span>`;
-  const valid = L.filter(l => l.codigo && (l.debe > 0) !== (l.haber > 0));
+  const valid = L.filter(l => l.codigo && l.codigo !== '__new' && (l.debe > 0) !== (l.haber > 0));
   $('#save').disabled = !(d === 0 && td > 0 && valid.length >= 2 && valid.length === L.length);
 }
 function resetForm() {
@@ -166,13 +195,27 @@ function resetForm() {
   $('#fecha').value = today(); $('#concepto').value = '';
   $('#nro').value = D ? D.nextNro : ''; calc();
 }
+// Reconstruye las opciones de todas las líneas conservando lo elegido
+function refreshSelects() {
+  document.querySelectorAll('#lines .acc').forEach(s => {
+    const v = s.value;
+    s.innerHTML = opts();
+    s.value = [...s.options].some(o => o.value === v) ? v : '';
+  });
+}
 $('#lines').addEventListener('input', e => {
   const tr = e.target.closest('tr');
   if (e.target.classList.contains('d') && e.target.value) tr.querySelector('.h').value = '';
   if (e.target.classList.contains('h') && e.target.value) tr.querySelector('.d').value = '';
   calc();
 });
-$('#lines').addEventListener('change', calc);
+$('#lines').addEventListener('change', e => {
+  if (e.target.classList.contains('acc') && e.target.value === '__new') {
+    e.target.value = '';
+    openNewAcc(e.target);
+  }
+  calc();
+});
 $('#lines').addEventListener('click', e => {
   if (e.target.classList.contains('x')) { e.target.closest('tr').remove(); calc(); }
 });
@@ -186,6 +229,48 @@ $('#save').onclick = async () => {
     await load(); resetForm();
   } catch (e) { toast(e.message, false); calc(); }
 };
+
+// ---------- Nueva cuenta ----------
+function suggestCode() {
+  const nums = D.plan.map(p => String(p.codigo)).filter(c => /^\d+$/.test(c));
+  if (!nums.length) return '';
+  const max = nums.reduce((a, c) => (c.length > a.length || (c.length === a.length && c > a)) ? c : a, nums[0]);
+  return String(Number(max) + 1).padStart(max.length, '0');
+}
+function openNewAcc(sel) {
+  if (!D) return;
+  pendingSelect = sel || null;
+  $('#aCod').value = suggestCode(); $('#aNom').value = ''; $('#aErr').textContent = '';
+  $('#dlgC').showModal();
+  $('#aNom').focus();
+}
+async function createAcc() {
+  const codigo = $('#aCod').value.trim(), cuenta = $('#aNom').value.trim(), tipo = $('#aTipo').value;
+  const err = m => { $('#aErr').textContent = m; };
+  if (!codigo || !cuenta) return err('Completá código y nombre.');
+  if (D.plan.some(p => String(p.codigo).toLowerCase() === codigo.toLowerCase())) return err('Ya existe una cuenta con ese código.');
+  if (D.plan.some(p => String(p.cuenta).trim().toLowerCase() === cuenta.toLowerCase())) return err('Ya existe una cuenta con ese nombre.');
+  $('#aOk').disabled = true;
+  try {
+    await post({ action: 'addCuenta', codigo, cuenta, tipo });
+    await load();
+    refreshSelects();
+    if (pendingSelect && document.body.contains(pendingSelect)) pendingSelect.value = codigo;
+    pendingSelect = null;
+    calc();
+    $('#dlgC').close();
+    toast('Cuenta ' + codigo + ' · ' + cuenta + ' creada');
+  } catch (e) { err(e.message); }
+  $('#aOk').disabled = false;
+}
+$('#aOk').onclick = createAcc;
+$('#aCancel').onclick = () => { pendingSelect = null; $('#dlgC').close(); };
+$('#dlgC').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); createAcc(); } });
+$('#newAcc').onclick = () => {
+  const empty = [...document.querySelectorAll('#lines .acc')].find(s => !s.value);
+  openNewAcc(empty || null);
+};
+$('#newAcc2').onclick = () => openNewAcc(null);
 
 // ---------- Vistas ----------
 function renderDiario() {
@@ -212,6 +297,13 @@ function renderBalance() {
   const c = x => `<span class="${x === 'OK' ? 'ok' : 'er'}">${esc(x)}</span>`;
   $('#ctrl').innerHTML = `Sumas Debe = Sumas Haber: ${c(b.control1)}<br>Saldo Deudor = Saldo Acreedor: ${c(b.control2)}`;
 }
+function renderPlan() {
+  const q = $('#filPlan').value.toLowerCase();
+  const hasTipo = D.plan.some(p => p.tipo);
+  $('#tb-plan').innerHTML = '<thead><tr><th>Código</th><th>Cuenta</th>' + (hasTipo ? '<th>Tipo</th>' : '') + '</tr></thead><tbody>' +
+    D.plan.filter(p => !q || (p.codigo + ' ' + p.cuenta).toLowerCase().includes(q))
+      .map(p => `<tr><td>${esc(p.codigo)}</td><td>${esc(p.cuenta)}</td>${hasTipo ? `<td>${esc(p.tipo)}</td>` : ''}</tr>`).join('') + '</tbody>';
+}
 function renderGrid(sel, grid, cols) {
   $(sel).innerHTML = '<tbody>' + grid.filter(r => cols.some(c => String(r[c]).trim() !== '')).map(r => {
     const bold = cols.some(c => { const s = String(r[c]).trim(); return s && (s === s.toUpperCase() && /[A-ZÁÉÍÓÚ]/.test(s) || /^Total/i.test(s)); });
@@ -219,7 +311,7 @@ function renderGrid(sel, grid, cols) {
   }).join('') + '</tbody>';
 }
 function render() {
-  renderDiario(); renderBalance();
+  renderDiario(); renderBalance(); renderPlan();
   renderGrid('#tb-pat', D.patrimonial, [0, 1, 3, 4]);
   renderGrid('#tb-res', D.resultados, [0, 1]);
   if (!$('#lines').children.length) resetForm(); else $('#nro').value = D.nextNro;
@@ -232,6 +324,7 @@ $('#tabs').onclick = e => {
   document.querySelectorAll('main > section').forEach(s => s.hidden = s.id !== 't-' + t);
 };
 $('#fil').oninput = () => D && renderDiario();
+$('#filPlan').oninput = () => D && renderPlan();
 $('#refresh').onclick = load;
 $('#cfg').onclick = () => { $('#cUrl').value = cfg.url; $('#cKey').value = cfg.key; $('#dlg').showModal(); };
 $('#cfgForm').addEventListener('submit', e => {
