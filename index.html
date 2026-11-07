@@ -94,7 +94,7 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 <dialog id="dlg">
   <form method="dialog" id="cfgForm">
     <h3 style="margin-top:0">Conexión con Google Sheets</h3>
-    <label>URL de la Web App (termina en /exec)<input id="cUrl" placeholder="https://script.google.com/macros/s/AKfycbwVfRZAJ6HeregeF7e3rton03K4GOnXlmSc547saP7FBdjnbDoJAfdRaYbM_Ugc7go2fQ/exec"></label>
+    <label>URL de la Web App (termina en /exec)<input id="cUrl" placeholder="https://script.google.com/macros/s/AKfycbyerIJlmgWh-BR8yBTkiti_1iWPxZry1h6rrXWsp2mEVR52OCz8HdREuxpfa9jMcKvqtQ/exec"></label>
     <label>Clave (API_KEY del Code.gs)<input id="cKey" type="password"></label>
     <div class="row"><button class="pri" value="ok">Guardar y conectar</button><button value="cancel" formnovalidate>Cancelar</button></div>
     <p style="font-size:12px;color:var(--mut)">Se guardan solo en este navegador; no quedan en el código del repositorio.</p>
@@ -103,17 +103,17 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 
 <dialog id="dlgC">
   <h3 style="margin-top:0">Nueva cuenta</h3>
-  <label>Código<input id="aCod" autocomplete="off"></label>
-  <label>Nombre de la cuenta<input id="aNom" autocomplete="off" placeholder="Ej: Gastos de limpieza"></label>
   <label>Tipo
     <select id="aTipo">
       <option>Activo</option>
       <option>Pasivo</option>
       <option>Patrimonio Neto</option>
       <option>Ingresos</option>
-      <option>Egresos</option>
+      <option selected>Egresos</option>
     </select>
   </label>
+  <label>Código (formato 5.1.06 — se sugiere el siguiente libre)<input id="aCod" autocomplete="off"></label>
+  <label>Nombre de la cuenta<input id="aNom" autocomplete="off" placeholder="Ej: Gastos de limpieza"></label>
   <div class="row"><button class="pri" id="aOk" type="button">Crear cuenta</button><button id="aCancel" type="button">Cancelar</button></div>
   <p id="aErr" class="er" style="font-size:12px;margin-bottom:0"></p>
 </dialog>
@@ -231,24 +231,42 @@ $('#save').onclick = async () => {
 };
 
 // ---------- Nueva cuenta ----------
-function suggestCode() {
-  const nums = D.plan.map(p => String(p.codigo)).filter(c => /^\d+$/.test(c));
-  if (!nums.length) return '';
-  const max = nums.reduce((a, c) => (c.length > a.length || (c.length === a.length && c > a)) ? c : a, nums[0]);
-  return String(Number(max) + 1).padStart(max.length, '0');
+// Primer número del código según el tipo: 1 Activo, 2 Pasivo, 3 PN, 4 Ingresos, 5 Egresos
+const PREF = { 'Activo': '1', 'Pasivo': '2', 'Patrimonio Neto': '3', 'Ingresos': '4', 'Egresos': '5' };
+const cmpCode = (a, b) => {
+  const x = a.split('.'), y = b.split('.');
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (+x[i] || 0) - (+y[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+};
+// Sugiere el siguiente código libre del tipo elegido (ej.: después de 5.1.05 → 5.1.06)
+function suggestCode(tipo) {
+  const p = PREF[tipo] || '1';
+  const codes = D.plan.map(x => String(x.codigo))
+    .filter(c => /^\d+(\.\d+)+$/.test(c) && c.split('.')[0] === p).sort(cmpCode);
+  if (!codes.length) return p + '.1.01';
+  const parts = codes[codes.length - 1].split('.');
+  const last = parts.pop();
+  parts.push(String(+last + 1).padStart(last.length, '0'));
+  return parts.join('.');
 }
 function openNewAcc(sel) {
   if (!D) return;
   pendingSelect = sel || null;
-  $('#aCod').value = suggestCode(); $('#aNom').value = ''; $('#aErr').textContent = '';
+  $('#aCod').value = suggestCode($('#aTipo').value); $('#aNom').value = ''; $('#aErr').textContent = '';
   $('#dlgC').showModal();
   $('#aNom').focus();
 }
+$('#aTipo').addEventListener('change', () => { if (D) $('#aCod').value = suggestCode($('#aTipo').value); });
 async function createAcc() {
   const codigo = $('#aCod').value.trim(), cuenta = $('#aNom').value.trim(), tipo = $('#aTipo').value;
   const err = m => { $('#aErr').textContent = m; };
   if (!codigo || !cuenta) return err('Completá código y nombre.');
-  if (D.plan.some(p => String(p.codigo).toLowerCase() === codigo.toLowerCase())) return err('Ya existe una cuenta con ese código.');
+  if (!/^\d+(\.\d+)+$/.test(codigo)) return err('El código tiene que tener el formato 5.1.06 (números separados por puntos).');
+  if (codigo.split('.')[0] !== PREF[tipo]) return err('Para una cuenta de ' + tipo + ' el código tiene que empezar con ' + PREF[tipo] + '.');
+  if (D.plan.some(p => String(p.codigo) === codigo)) return err('Ya existe una cuenta con ese código.');
   if (D.plan.some(p => String(p.cuenta).trim().toLowerCase() === cuenta.toLowerCase())) return err('Ya existe una cuenta con ese nombre.');
   $('#aOk').disabled = true;
   try {
